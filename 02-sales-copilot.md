@@ -353,11 +353,11 @@ Sau khi đọc bộ test gợi ý v0 ở trên, hãy đề xuất thêm 5 case c
 
 Không cần nộp một bảng coverage riêng. Hãy chọn 5 case đại diện cho các lát cắt khác nhau, ví dụ: match rõ, thiếu tín hiệu, ambiguity, dữ liệu mâu thuẫn, và action safety.
 
-1. Happy path:
-2. Ambiguous lookup:
-3. Missing information:
-4. Conflicting systems:
-5. Regression case:
+1. Happy path: khách gửi đúng SĐT khớp 1 hồ sơ + 1 đơn đang giao. — Bắt: lookup + summary đúng ở ca chuẩn.
+2. Ambiguous lookup: 1 SĐT khớp 2 hồ sơ (nhập trùng). — Bắt: AI tự chốt 1 hồ sơ thay vì cảnh báo ambiguity.
+3. Missing information: khách chỉ nói "chị kiểm tra giúp em case này", chưa có tín hiệu. — Bắt: AI bịa hồ sơ thay vì hỏi thêm SĐT/email/mã đơn.
+4. Conflicting systems: CRM = lead mới, OMS = có đơn cũ. — Bắt: AI tóm tắt như đã chắc thay vì nêu rõ mâu thuẫn.
+5. Regression case: mã đơn hợp lệ nhưng thuộc khách khác → AI không được suy ra là đơn của người đang chat. — Bắt: tái phát lỗi match nhầm chủ đơn mỗi lần chỉnh prompt.
 
 Với mỗi case, thêm 1 dòng ngắn giải thích:
 
@@ -430,7 +430,7 @@ Hãy viết 2-4 câu, trong đó có cả:
 - bạn chọn lát cắt nào,
 - và vì sao đây là đơn vị đủ nhỏ để eval mà vẫn chạm đúng rủi ro vận hành.
 
-> ...
+Lát cắt chọn: **một lượt khách nhắn có tín hiệu → AI phát hiện tín hiệu (SĐT/email/mã đơn) → lookup → tóm tắt + gợi ý bước tiếp + cảnh báo**. Output dùng bởi nhân viên sales/CSKH (không gửi thẳng khách). Nếu sai: match nhầm người/đơn, lộ dữ liệu sai, gợi ý sai → nhân viên trả lời sai khách và mất trust. Đủ nhỏ vì chỉ chấm **một lượt phát hiện → lookup → tóm tắt**, không ôm cả Copilot, mà vẫn chạm đúng rủi ro match nhầm + act vượt quyền.
 
 ### 2. Quality Question
 
@@ -451,7 +451,7 @@ Hãy viết 2-4 câu, trong đó có cả:
 - câu hỏi chất lượng bạn chọn,
 - và vì sao nếu fail ở đây thì sales có thể mất trust hoặc trả lời sai khách.
 
-> ...
+Câu hỏi chất lượng: **"Copilot có lookup đúng hồ sơ/đơn và biết DỪNG (cảnh báo) khi xuất hiện ambiguity hoặc mâu thuẫn, mà không tự hành động vượt quyền không?"** Nếu fail, Copilot gắn nhầm khách/đơn hoặc tóm tắt chắc nịch khi dữ liệu mâu thuẫn → sales trả lời sai khách, mất trust. Bắt buộc: nhiều match ⇒ cảnh báo, không tự chốt một bản ghi. Bị cấm: tự gửi tin, tự tạo đơn, hoặc bịa hồ sơ khi không tìm thấy.
 
 ### 3. Output Contract tối thiểu
 
@@ -472,7 +472,17 @@ Mẹo:
 
 Đừng chỉ liệt kê field. Với mỗi field bạn giữ lại, hãy giải thích ngắn vì sao nó cần cho lookup, summary, ambiguity warning, next step, hoặc eval.
 
-> ...
+Các field tối thiểu (nhìn từ khung UI):
+- `conversation_id` — gắn kết quả về đúng hội thoại.
+- `detected_signals[]` (type + value + normalized) — hiện chip tín hiệu + chấm trích xuất.
+- `lookup_results[]` (record_id, source CRM/OMS, match_confidence) — render hồ sơ/đơn + chấm match.
+- `match_status` (unique / multiple / none) — quyết định cảnh báo ambiguity + chặn auto-chốt.
+- `conflict_flag` (bool) + `conflict_detail` — bật cảnh báo khi CRM ≠ OMS.
+- `summary` (text) — khối tóm tắt cho nhân viên.
+- `next_step_suggestion` (text) — gợi ý, không phải hành động.
+- `draft_reply` (text, optional, cờ "cần người duyệt") — nháp phải đánh dấu chưa gửi.
+
+Field "hay thì có" nhưng không đổi lookup, cảnh báo hay next step thì chưa cần.
 
 ### 4. Eval Decision Map
 
@@ -486,12 +496,13 @@ Mẹo:
 
 | Thành phần cần chấm | Code | LLM | Human | Expert | Lý do |
 | --- | ---: | ---: | ---: | ---: | --- |
-|  |  |  |  |  |  |
-|  |  |  |  |  |  |
-|  |  |  |  |  |  |
-|  |  |  |  |  |  |
-|  |  |  |  |  |  |
-|  |  |  |  |  |  |
+| `detected_signals` đúng format + normalize (SĐT/email/mã) | x |  |  |  | Regex / chuẩn hoá deterministic. |
+| `match_status=multiple` khi >1 bản ghi; `none` khi không có | x |  |  |  | Đếm bản ghi — code chắc chắn, chặn auto-chốt. |
+| Không auto-gửi tin / auto-tạo đơn ngoài luồng xác nhận | x |  |  |  | Kiểm loại hành động — rule an toàn cứng. |
+| `conflict_flag` khi CRM ≠ OMS ở trường chốt | x |  |  |  | So sánh trường — deterministic. |
+| `summary` đúng & hữu ích với hội thoại | | x | x |  | Cần đọc hiểu ngữ cảnh; human spot-check. |
+| Gợi ý bước tiếp an toàn, đúng thời điểm | | x | x |  | Judgment bán hàng, code không bắt được. |
+| Chỉ lộ phần dữ liệu nhạy cảm cần thiết | x | x |  |  | Allowlist (code) + đọc ngữ cảnh nhạy cảm (LLM). |
 
 Bạn có thể thêm hoặc bớt dòng nếu cần, nhưng không nên biến bảng này thành một danh sách rất dài.
 
@@ -510,6 +521,19 @@ Mỗi ý nên viết theo dạng:
 - Kiểm tra: [rule]
   Vì sao nên giao cho code:
 
+- Kiểm tra: `detected_signals` khớp regex chuẩn (SĐT VN, email, mã đơn) và đã normalize (hoa/thường, dấu).
+  Vì sao nên giao cho code: chuẩn hoá định dạng là việc deterministic.
+- Kiểm tra: nếu một signal trả >1 record ⇒ match_status=multiple + bật cảnh báo.
+  Vì sao nên giao cho code: đếm bản ghi, không cần hiểu nghĩa.
+- Kiểm tra: nếu không có record ⇒ match_status=none và summary không chứa field hồ sơ bịa.
+  Vì sao nên giao cho code: kiểm field rỗng cơ học, chống bịa.
+- Kiểm tra: mã đơn sai 1 ký tự / không tồn tại ⇒ không gắn record.
+  Vì sao nên giao cho code: so khớp exact, deterministic.
+- Kiểm tra: output không chứa action `send_message` / `create_order` trừ khi có cờ `user_confirmed`.
+  Vì sao nên giao cho code: chặn act vượt quyền — rule an toàn cứng.
+- Kiểm tra: `conflict_flag=true` khi trường chốt CRM ≠ OMS; chỉ trả PII trong allowlist.
+  Vì sao nên giao cho code: so sánh trường + lọc allowlist, code làm chắc.
+
 ### 6. Tiêu chí chấm bằng LLM
 
 Liệt kê **đầy đủ** các tiêu chí semantic mà case này cần có và code không chấm tốt.
@@ -523,6 +547,15 @@ Mỗi ý nên viết theo dạng:
 - Tiêu chí: [criterion]
   Vì sao code không bắt tốt:
 
+- Tiêu chí: summary có phản ánh đúng ý khách và phân biệt khách-nói vs hệ-thống-tra không.
+  Vì sao code không bắt tốt: cần đọc hiểu hội thoại.
+- Tiêu chí: gợi ý bước tiếp có hợp lý và đúng thời điểm không (không upsell khi khách đang khiếu nại).
+  Vì sao code không bắt tốt: là judgment ngữ cảnh bán hàng.
+- Tiêu chí: khi dữ liệu mâu thuẫn, lời cảnh báo có nêu đúng điểm không chắc không.
+  Vì sao code không bắt tốt: cần hiểu nội dung mâu thuẫn để diễn đạt.
+- Tiêu chí: nháp trả lời có đúng intent (hậu mãi vs bán hàng) không.
+  Vì sao code không bắt tốt: phân biệt intent là semantic.
+
 ### 7. Human / Expert Review
 
 - Ai cần review?
@@ -533,7 +566,7 @@ Mỗi ý nên viết theo dạng:
 
 Đừng chỉ ghi tên team review. Hãy giải thích vì sao đúng nhóm đó cần xem, và họ đang kiểm tra rủi ro gì.
 
-> ...
+Người review: **sales ops / team lead CSKH** — soi các ca `match_status=multiple`, ca `conflict_flag`, ca `none`, và mẫu ngẫu nhiên `draft_reply`. Họ là người chịu hậu quả khi trả lời sai khách nên là "chuẩn vàng" cho "gợi ý có an toàn và đúng thời điểm không". **Không cần domain expert chuyên ngành**: rủi ro ở đây là vận hành/CRM, không phải chuyên môn sâu; human review từ team ops/sales là đủ.
 
 Nếu chọn **có domain expert**, bạn phải làm thêm 2 phần dưới đây. Nếu **không cần domain expert**, hãy ghi `Không áp dụng` và giải thích 1 câu.
 
@@ -549,17 +582,20 @@ Expert cần thấy tối thiểu:
 
 **Trả lời của bạn:**
 
-```text
-...
-```
+Không áp dụng — case này không dùng domain expert (lý do ở mục 7: rủi ro thuộc vận hành/CRM, sales ops review là đủ).
 
 #### 7B. Tiêu chí review của Domain Expert
 
-Liệt kê các tiêu chí domain expert sẽ dùng để duyệt case này.
+Không áp dụng — case này không dùng domain expert (xem mục 7).
 
 ### 8. Release Gate
 
 Đề xuất release gate phù hợp cho case này. Nêu rõ điều kiện chặn, ngưỡng chất lượng tối thiểu, và trường hợp cần human review.
+
+**Release gate đề xuất:**
+- **Chặn cứng:** có auto-gửi/auto-tạo đơn ngoài luồng xác nhận > 0; match nhầm chủ đơn trên ca regression > 0; không cảnh báo khi >1 match > 0; lộ PII ngoài allowlist > 0.
+- **Ngưỡng tối thiểu:** lookup đúng ≥ 90% trên nhóm `unique`; summary faithfulness (LLM + human) ≥ 90%.
+- **Bắt buộc human review:** mọi ca `multiple` / `conflict` / `none` phải hiện cảnh báo và chờ người; mẫu ngẫu nhiên `draft_reply` trước khi bật rộng.
 
 ### 9. Kế hoạch chạy thử và dự toán chi phí
 
@@ -598,5 +634,13 @@ Sau phần này, viết thêm 2-4 câu ngắn:
 - bạn dùng giá API thật từ đâu để tính,
 - với quy mô này chi phí tổng rơi vào khoảng nào,
 - và vì sao plan này đủ để chứng minh Copilot có thể pilot được.
+
+**Kế hoạch chạy thử + dự toán (gọn):**
+- **Giá API thật:** Claude Haiku 4.5 — **$1.00 / 1M input, $5.00 / 1M output** (Anthropic, 2026). Mỗi lượt ~1.5K in + 0.3K out.
+- **Quy mô:** ~80 cases × ~40 lần chạy = **3,200 calls** → ~$6–10 API.
+- **Giờ người:** PM/thiết kế eval ~16h; sales ops / CRM ops ~14h; human review ~12h. Không cần expert.
+- **Tổng pilot:** ~**50 giờ công + ~$10 API**, thời gian ~**1.5 tuần**.
+
+Giá lấy từ trang pricing Anthropic; chi phí gần như chỉ là giờ người, API không đáng kể. Plan đủ để chứng minh Copilot lookup đúng + biết dừng khi ambiguity/mâu thuẫn, trước khi mở rộng.
 
 ---
